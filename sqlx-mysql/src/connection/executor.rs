@@ -187,7 +187,9 @@ impl MySqlConnection {
                 // otherwise, this first packet is the start of the result-set metadata,
                 *self.inner.stream.waiting.front_mut().unwrap() = Waiting::Row;
 
-                let num_columns = packet.get_uint_lenenc() as usize; // column count
+                let num_columns = packet.get_uint_lenenc(); // column count
+                let num_columns = usize::try_from(num_columns)
+                    .map_err(|_| err_protocol!("column count overflows usize: {num_columns}"))?;
 
                 if needs_metadata {
                     column_names = Arc::new(recv_result_metadata(&mut self.inner.stream, num_columns, Arc::make_mut(&mut columns)).await?);
@@ -245,13 +247,15 @@ impl MySqlConnection {
 impl<'c> Executor<'c> for &'c mut MySqlConnection {
     type Database = MySql;
 
-    fn fetch_many<'e, 'q: 'e, E: 'q>(
+    fn fetch_many<'e, 'q, E>(
         self,
         mut query: E,
     ) -> BoxStream<'e, Result<Either<MySqlQueryResult, MySqlRow>, Error>>
     where
         'c: 'e,
         E: Execute<'q, Self::Database>,
+        'q: 'e,
+        E: 'q,
     {
         let sql = query.sql();
         let arguments = query.take_arguments().map_err(Error::Encode);
@@ -270,13 +274,12 @@ impl<'c> Executor<'c> for &'c mut MySqlConnection {
         })
     }
 
-    fn fetch_optional<'e, 'q: 'e, E: 'q>(
-        self,
-        query: E,
-    ) -> BoxFuture<'e, Result<Option<MySqlRow>, Error>>
+    fn fetch_optional<'e, 'q, E>(self, query: E) -> BoxFuture<'e, Result<Option<MySqlRow>, Error>>
     where
         'c: 'e,
         E: Execute<'q, Self::Database>,
+        'q: 'e,
+        E: 'q,
     {
         let mut s = self.fetch_many(query);
 
@@ -338,7 +341,7 @@ impl<'c> Executor<'c> for &'c mut MySqlConnection {
                 .send_packet(StmtClose { statement: id })
                 .await?;
 
-            let columns = (&*metadata.columns).clone();
+            let columns = (*metadata.columns).clone();
 
             let nullable = columns
                 .iter()
@@ -384,7 +387,7 @@ fn recv_next_result_column(def: &ColumnDefinition, ordinal: usize) -> Result<MyS
         (name, _) => UStr::new(name),
     };
 
-    let type_info = MySqlTypeInfo::from_column(&def);
+    let type_info = MySqlTypeInfo::from_column(def);
 
     Ok(MySqlColumn {
         name,
