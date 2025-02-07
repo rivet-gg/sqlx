@@ -11,7 +11,7 @@ use tracing::span::Span;
 use sqlx_core::describe::Describe;
 use sqlx_core::error::Error;
 use sqlx_core::transaction::{
-    begin_ansi_transaction_sql, commit_ansi_transaction_sql, rollback_ansi_transaction_sql,
+    commit_ansi_transaction_sql, rollback_ansi_transaction_sql,
 };
 use sqlx_core::Either;
 
@@ -487,5 +487,14 @@ mod rendezvous_oneshot {
             ack_tx.send(()).map_err(|_| Canceled)?;
             Ok(value)
         }
+    }
+}
+
+// IMPORTANT: Forces all sqlite txns to use BEGIN IMMEDIATE instead of just BEGIN
+pub fn begin_ansi_transaction_sql(depth: usize) -> Cow<'static, str> {
+    if depth == 0 {
+        Cow::Borrowed("BEGIN IMMEDIATE")
+    } else {
+        Cow::Owned(format!("SAVEPOINT _sqlx_savepoint_{depth}"))
     }
 }
